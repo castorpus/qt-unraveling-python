@@ -17,15 +17,15 @@ from functools import partial
 from qt_unraveling.misc_func import parallel_run
 
 # Import numba optimized functions
-from qt_unraveling.usual_operators import operators_Mrep, sqrt_jit
+from qt_unraveling.usual_operators import operators_Mrep, sqrt_jit, PsiToRho
 
 # Trajectory modules
 from qt_unraveling.diffusive_trajectory import diffusiveRhoTrajectory_, diffusiveRhoTrajectory_td
 from qt_unraveling.feedback_trajectory import feedbackRhoTrajectory_, feedbackRhoTrajectory_delay
-from qt_unraveling.jumpy_trajectory import jumpRhoTrajectory_, jumpRhoTrajectory_td
+from qt_unraveling.jumpy_trajectory import jumpTrajectory_,jumpRhoTrajectory_, jumpRhoTrajectory_td
 
 # Import integrators
-from qt_unraveling.integrators import custom_rungekutta_integrator, scipy_integrator, vonneumann_operator, standartLindblad_operator, feedbackEvol_operator
+from qt_unraveling.integrators import custom_rungekutta_integrator, scipy_integrator, schrodinger_operator, vonneumann_operator, GKSL_operator, feedbackEvol_operator
 
 
 class QuantumSystem:
@@ -38,7 +38,8 @@ class QuantumSystem:
         self.setup_hamiltonian(drivingH)
         
         if lindbladList is not None:
-            self.setup_unraveling_matrices(lindbladList, FList, uMatrix, mMatrix, oMatrix, HMatrix, TMatrix, WMatrix, PhiMatrix)
+            self.setup_unraveling_matrices(lindbladList, FList, uMatrix, 
+                                           mMatrix, oMatrix, HMatrix, TMatrix, WMatrix, PhiMatrix)
             self.setup_diffusive_methods()
             self.setup_jumpy_methods()
             self.setup_feedback_methods()
@@ -216,18 +217,24 @@ class QuantumSystem:
     def setup_feedback_methods(self):
         self.feedback_methods = FeedbackMethods(self)
 
-    def vonneumann_analytical(self, integrator='scipy', method='BDF', rrtol=1e-5, aatol=1e-5, last_point=False):
+    def unitary_analytical(self, integrator='scipy', method='BDF',
+                           rrtol=1e-5, aatol=1e-5, last_point=False):
         hamiltonian = self.H
-        op_lind = lambda rho_it, it: vonneumann_operator(hamiltonian, rho_it, it)
+        if self.initial_state_type == 0:
+            op_gen_Uni = lambda psi_it, it: schrodinger_operator(hamiltonian, psi_it, it)
+            initialState = self.initialStatePsi
+        elif self.initial_state_type == 1:
+            op_gen_Uni = lambda rho_it, it: vonneumann_operator(hamiltonian, rho_it, it)
+            initialState = self.initialStateRho
         if integrator == 'scipy':
-            return scipy_integrator(op_lind, self.initialStateRho, self.timeList, method=method, rrtol=rrtol, aatol=aatol, last_point=last_point)
+            return scipy_integrator(op_gen_Uni, initialState, self.timeList, method=method, rrtol=rrtol, aatol=aatol, last_point=last_point)
         elif integrator == 'runge-kutta':
-            return custom_rungekutta_integrator(op_lind, self.initialStateRho, self.timeList, last_point=last_point)
+            return custom_rungekutta_integrator(op_gen_Uni, initialState, self.timeList, last_point=last_point)
 
-    def lindblad_analytical(self, integrator='scipy', method='BDF', rrtol=1e-5, aatol=1e-5, last_point=False):
+    def unconditional_analytical(self, integrator='scipy', method='BDF', rrtol=1e-5, aatol=1e-5, last_point=False):
         hamiltonian = self.H
         lindblad_ops = self.cList
-        op_lind = lambda rho_it, it: standartLindblad_operator(hamiltonian, lindblad_ops, rho_it, it)
+        op_lind = lambda rho_it, it: GKSL_operator(hamiltonian, lindblad_ops, rho_it, it)
         if integrator == 'scipy':
             return scipy_integrator(op_lind, self.initialStateRho, self.timeList, method=method, rrtol=rrtol, aatol=aatol, last_point=last_point)
         elif integrator == 'runge-kutta':
@@ -360,12 +367,16 @@ class DiffusiveMethods:
 class JumpyMethods:
     def __init__(self, system):
         self.system = system
+        self.jumpTrajectory_compilation_status = False
+        self.jumpAverage_compilation_status = False
         self.jumpRhoTrajectory_compilation_status = False
         self.jumpRhoEnsemble_compilation_status = False
         self.jumpRhoAverage_compilation_status = False
         self.coherent_field_check = True
 
         if (not system.timedepent_lindbladoperators) and (not system.timedepent_hamiltonian) and (not system.nonfixedUnraveling):
+            self.jumpTrajectory_compilation_status = True
+            self.jumpAverage_compilation_status = True
             self.jumpRhoTrajectory_compilation_status = True
             self.jumpRhoEnsemble_compilation_status = True
             self.jumpRhoAverage_compilation_status = True
@@ -377,7 +388,39 @@ class JumpyMethods:
         return partial(jumpRhoTrajectory_td, self.system.initialStateRho, self.system.timeList, self.system.H, self.system.original_cList, self.system.eta_diag, self.system.cList)(coherent_fields, seed)
 
     def jump_rho_trajectory_tind(self, coherent_fields, seed=0):
-        return partial(jumpRhoTrajectory_, self.system.initialStateRho, self.system.timeList, self.system.drivingH, self.system.original_lindbladList, self.system.eta_diag, self.system.lindbladList)(coherent_fields, seed)
+        return partial(jumpRhoTrajectory_, self.system.initialStateRho, self.system.timeList, 
+                       self.system.drivingH, self.system.original_lindbladList, self.system.eta_diag, 
+                       self.system.lindbladList)(coherent_fields, seed)
+    
+    def jump_trajectory_tind(self, seed=0):
+        return partial(jumpTrajectory_, self.system.initialStatePsi, 
+                       self.system.timeList, 
+                       self.system.drivingH, self.system.original_lindbladList)(seed)
+
+    def jump_trajectory(self, seed=0):
+       return self.jump_trajectory_tind(seed)
+    
+    def jump_traj_ensemble(self, n_trajectories):
+        if ((self.system.timedepent_lindbladoperators) or (self.system.timedepent_hamiltonian) or (self.system.nonfixedUnraveling)) and (not self.jumpAverage_compilation_status):
+            self.jumpAverage_compilation_status = True
+            print('Compiling jumpAverage ...')
+            tmp = self.jump_trajectory(seed=0)
+            del tmp
+
+        all_traj = parallel_run(partial(self.jump_trajectory), np.arange(n_trajectories))
+        # psi_to_rho = np.zeros(
+        #     (n_trajectories,)+np.shape(self.system.timeList) + np.shape(self.system.initialStateRho), dtype=np.complex128
+        #     )
+        # psi_average = np.zeros(
+        #     np.shape(self.system.timeList) + np.shape(self.system.initialStateRho), dtype=np.complex128
+        #     )
+        # # Code to be use in order to recover the unconditional state
+        # for traj_n, psi_traj in enumerate(all_traj):
+        #     psi_to_rho[traj_n] = [PsiToRho(psi) for psi in psi_traj]
+        
+        # psi_average = np.average(psi_to_rho, axis=0)
+
+        return all_traj
 
     def jump_rho_trajectory(self, coherent_fields=[], coherent_field_check=True, seed=0):
         if np.shape(coherent_fields)[0] != 2 * self.system.num_op:
@@ -546,7 +589,8 @@ def representation(num_op, mMatrix, uMatrix, HMatrix, oMatrix, TMatrix, PhiMatri
         SQ_U_O = np.ascontiguousarray(np.dot(np.ascontiguousarray(sqrt_U), O))
         for i in range(np.shape(SQ_U_O)[0]):
             for j in range(np.shape(SQ_U_O)[0]):
-                SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+                #SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+                SQ_U_O[i, j] = np.round(SQ_U_O[i, j], 7)
 
         M_real = SQ_U_O[0:num_op, :]
         M_imag = SQ_U_O[num_op:2 * num_op, :]
@@ -580,7 +624,8 @@ def representation(num_op, mMatrix, uMatrix, HMatrix, oMatrix, TMatrix, PhiMatri
         SQ_U_O = np.ascontiguousarray(np.dot(np.ascontiguousarray(sqrt_U), O))
         for i in range(np.shape(SQ_U_O)[0]):
             for j in range(np.shape(SQ_U_O)[0]):
-                SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+                #SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+                SQ_U_O[i, j] = np.round(SQ_U_O[i, j], 7)
 
         M_real = SQ_U_O[0:num_op, :]
         M_imag = SQ_U_O[num_op:2 * num_op, :]
@@ -616,7 +661,8 @@ def update_defintions_uH(uMatrix, HMatrix, oMatrix):
     SQ_U_O = np.ascontiguousarray(np.dot(np.ascontiguousarray(sqrt_U), oMatrix))
     for i in range(np.shape(SQ_U_O)[0]):
         for j in range(np.shape(SQ_U_O)[0]):
-            SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+            #SQ_U_O[i, j] = np.round_(SQ_U_O[i, j], 7)
+            SQ_U_O[i, j] = np.round(SQ_U_O[i, j], 7)
 
     M_real = SQ_U_O[0:num_op, :]
     M_imag = SQ_U_O[num_op:2 * num_op, :]

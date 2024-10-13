@@ -18,6 +18,11 @@ sigmaz = np.array([[1,0],[0,-1]], dtype = np.complex128)
 sigmap = 0.5*(sigmax + 1j*sigmay)
 sigmam = 0.5*(sigmax - 1j*sigmay)
 
+@njit(complex128[:,:](complex128[:]))
+def PsiToRho(a):
+    a = np.ascontiguousarray(a)
+    return np.outer(a,np.conjugate(a))
+
 @njit(complex128[:,:](complex128[:,:], complex128[:,:]))
 def Com(a,b):
     a, b = np.ascontiguousarray(a), np.ascontiguousarray(b)

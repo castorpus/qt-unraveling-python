@@ -12,32 +12,14 @@ from scipy.integrate import solve_ivp
 
 import qt_unraveling.usual_operators as op
 
-def custom_rungekutta_integrator(differential_operator, initialStateRho : np.ndarray, timeList : np.ndarray, last_point : bool = False) -> np.ndarray:
-    """
-    Performs the integration of the time-evolution of the differential_operator
-    
-    Parameters:
-    differential_operator (function): the differential operator to integrate as a njitted function
-    initialStateRho (array): Initial state
-    timeList (array): Time list to integrate
-    last_point (bool) : True to return just the final point of the evolution
-    
-    Returns:
-    rho_list (array): resulting array of density matrices for each time step if last_point False, the last point of evolution otherwise
-    """
-    if last_point:
-        rho_list = custom_rungekutta_integrator_last_point(differential_operator, initialStateRho, timeList)
-    else:
-        rho_list = custom_rungekutta_integrator_full_range(differential_operator, initialStateRho, timeList)
-    return rho_list
-    
-def scipy_integrator(differential_operator, initialStateRho : np.ndarray, timeList : np.ndarray, method : str = 'BDF', rrtol : float = 1e-5, aatol : float = 1e-5, last_point : bool = False) -> np.ndarray:
+def scipy_integrator(differential_operator, initialState : np.ndarray,
+                      timeList : np.ndarray, method : str = 'BDF', rrtol : float = 1e-5, aatol : float = 1e-5, last_point : bool = False) -> np.ndarray:
     """
     Performs the integration of the time-evolution of the differential_operator using the scipy solve_ivp function
     
     Parameters:
     differential_operator (function): the differential operator to integrate as a njitted function
-    initialStateRho (array): Initial state
+    initialStatePsi (array): Initial state
     timeList (array): Time list to integrate
     method (str) : scipy integrator method
     rrtol (float) : If the relative error estimate is larger than rtol, the computation continues until the error is reduced below this threshold, or until a maximum number of iterations is reached
@@ -45,24 +27,52 @@ def scipy_integrator(differential_operator, initialStateRho : np.ndarray, timeLi
     last_point (bool) : True to return just the final point of the evolution
     
     Returns:
-    rho_list (array): resulting array of density matrices for each time step if last_point False, the last point of evolution otherwise
+    psi_list (array): resulting array of states for each time step if last_point False, the last point of evolution otherwise
     """
-    dim = np.shape(initialStateRho)[0]
-    x0 = initialStateRho.reshape(-1) 
-    ##################################################################
-    def odefun(t,x):
-        rho = x.reshape([dim,dim])
-        dx = differential_operator(rho, t)
-        return dx.reshape(-1)
-    ##################################################################
+    dim = np.shape(initialState)[0]
+    if len(np.shape(initialState)) == 1:
+        initialStateType = 0
+        x0 = initialState
+        def odefun(t,x):
+            dx = differential_operator(x, t)
+            return dx
+    elif len(np.shape(initialState)) == 2:
+        initialStateType = 1
+        x0 = initialState.reshape(-1) 
+        def odefun(t,x):
+            rho = x.reshape([dim,dim])
+            dx = differential_operator(rho, t)
+            return dx.reshape(-1)
     if not last_point:
         sol = solve_ivp(odefun, [timeList[0], timeList[-1]], x0, t_eval = timeList, method = method, rtol = rrtol, atol = aatol)
-        rho_T = [sol.y[:,i].reshape([dim,dim]) for i in range(len(sol.t))] 
-        return rho_T
+        if initialStateType == 0:
+            state_T = [sol.y[:,i].reshape([dim]) for i in range(len(sol.t))]
+        elif initialStateType == 1:
+            state_T = [sol.y[:,i].reshape([dim,dim]) for i in range(len(sol.t))]
+        return state_T
     else:
         sol = solve_ivp(odefun, [timeList[0], timeList[-1]], x0, t_eval = [timeList[-1]], method = method, rtol = rrtol, atol = aatol)
-        rho_T = [sol.y[:,i].reshape([dim,dim]) for i in range(len(sol.t))] 
-        return rho_T[-1:]
+        if initialStateType == 0:
+            state_T = [sol.y[:,i].reshape([dim]) for i in range(len(sol.t))]
+        elif initialStateType == 1:
+            state_T = [sol.y[:,i].reshape([dim,dim]) for i in range(len(sol.t))] 
+        return state_T[-1:]
+
+#@njit
+def schrodinger_operator(drivingH, statePsi : np.ndarray, it : float) -> np.ndarray:
+    """
+    Gives the evaluation of the Schrodinger equation differential operator for a given state and time
+    
+    Parameters:
+    drivingH (function): The Hamiltonian operator as a function of time
+    statePsi (array): pure quantum state
+    it (float): time to evaluate
+
+    Returns:
+    unitary_evolution (array): resulting array of pure states for each time step if last_point False, the last point of evolution otherwise
+    """
+    unitary_evolution = -1j*np.dot(drivingH(it), statePsi)
+    return unitary_evolution
 
 #@njit
 def vonneumann_operator(drivingH, stateRho : np.ndarray, it : float) -> np.ndarray:
@@ -81,7 +91,7 @@ def vonneumann_operator(drivingH, stateRho : np.ndarray, it : float) -> np.ndarr
     return unitary_evolution
 
 #@njit
-def standartLindblad_operator(drivingH, lindbladList, stateRho : np.ndarray, it : float) -> np.ndarray:
+def GKSL_operator(drivingH, lindbladList, stateRho : np.ndarray, it : float) -> np.ndarray:
     """
     Gives the evaluation of the Lindablad equation differential operator for a given state and time
     
@@ -214,9 +224,28 @@ def feedbackEvoladaptative_operator(System_obj, stateRho : np.ndarray, it : floa
 
 #     return -1j*(op.Com(drivingH(it), stateRho) + comm_extra_term) + D_c + D_f 
 
-
+def custom_rungekutta_integrator(differential_operator, initialState : np.ndarray, timeList : np.ndarray, last_point : bool = False) -> np.ndarray:
+    """
+    Performs the integration of the time-evolution of the differential_operator
+    
+    Parameters:
+    differential_operator (function): the differential operator to integrate as a njitted function
+    initialStateRho (array): Initial state
+    timeList (array): Time list to integrate
+    last_point (bool) : True to return just the final point of the evolution
+    
+    Returns:
+    state_list (array): resulting array of state for each time step if last_point False, the last point of evolution otherwise
+    """
+    if last_point:
+        state_list = custom_rungekutta_integrator_last_point(differential_operator, initialState, timeList)
+    else:
+        state_list = custom_rungekutta_integrator_full_range(differential_operator, initialState, timeList)
+    return state_list
 #@njit
-def custom_rungekutta_integrator_last_point(differential_operator, initialStateRho : np.ndarray, timeList : np.ndarray) -> np.ndarray:
+def custom_rungekutta_integrator_last_point(differential_operator, 
+                                            initialState : np.ndarray, 
+                                            timeList : np.ndarray) -> np.ndarray:
     """
     Performs the integration of the time-evolution of the differential_operator
     
@@ -229,19 +258,23 @@ def custom_rungekutta_integrator_last_point(differential_operator, initialStateR
     np.array([rho_list]) (array): resulting final density matrix
     """
     dt = timeList[1] - timeList[0]
-    rho_list = np.zeros((np.shape(initialStateRho)[0],np.shape(initialStateRho)[1]), dtype=np.complex128)
-    rho_list += initialStateRho
+    dim = np.shape(initialState)[0]
+    if len(np.shape(initialState)) == 1:
+        state_list = np.zeros(dim, dtype=np.complex128)
+    elif len(np.shape(initialState)) == 2:
+        state_list = np.zeros((dim,dim), dtype=np.complex128)
+    state_list += initialState
     for n_ti, t_i in enumerate(timeList[:-1]):
         n_ti += 1
-        a = differential_operator(rho_list, t_i)
-        b = differential_operator(rho_list + 0.5*dt*a, t_i + 0.5*dt)
-        c = differential_operator(rho_list + 0.5*dt*b, t_i + 0.5*dt)
-        d = differential_operator(rho_list + dt*c, t_i + dt)
-        rho_list += (1./6.)*dt*(a + 2*b + 2*c + d)
-    return np.array([rho_list])
+        a = differential_operator(state_list, t_i)
+        b = differential_operator(state_list + 0.5*dt*a, t_i + 0.5*dt)
+        c = differential_operator(state_list + 0.5*dt*b, t_i + 0.5*dt)
+        d = differential_operator(state_list + dt*c, t_i + dt)
+        state_list += (1./6.)*dt*(a + 2*b + 2*c + d)
+    return np.array([state_list])
 
 #@njit
-def custom_rungekutta_integrator_full_range(differential_operator, initialStateRho : np.ndarray, timeList : np.ndarray) -> np.ndarray:
+def custom_rungekutta_integrator_full_range(differential_operator, initialState : np.ndarray, timeList : np.ndarray) -> np.ndarray:
     """
     Performs the integration of the time-evolution of the differential_operator
     
@@ -254,13 +287,18 @@ def custom_rungekutta_integrator_full_range(differential_operator, initialStateR
     np.array([rho_list]) (array): resulting array of density matrices for each time step
     """
     dt = timeList[1] - timeList[0]
-    rho_list = np.zeros((np.shape(timeList)[0],np.shape(initialStateRho)[0],np.shape(initialStateRho)[1]), dtype=np.complex128)
-    rho_list[0] += initialStateRho
+    dim = np.shape(initialState)[0]
+    if len(np.shape(initialState)) == 1:
+        state_list = np.zeros(dim, dtype=np.complex128)
+    elif len(np.shape(initialState)) == 2:
+        state_list = np.zeros((dim,dim), dtype=np.complex128)
+    state_list += initialState
     for n_ti, t_i in enumerate(timeList[:-1]):
         n_ti += 1
-        a = differential_operator(rho_list[n_ti-1], t_i)
-        b = differential_operator(rho_list[n_ti-1] + 0.5*dt*a, t_i + 0.5*dt)
-        c = differential_operator(rho_list[n_ti-1] + 0.5*dt*b, t_i + 0.5*dt)
-        d = differential_operator(rho_list[n_ti-1] + dt*c, t_i + dt)
-        rho_list[n_ti] += rho_list[n_ti-1] + (1./6.)*dt*(a + 2*b + 2*c + d)
-    return rho_list
+        a = differential_operator(state_list, t_i)
+        b = differential_operator(state_list + 0.5*dt*a, t_i + 0.5*dt)
+        c = differential_operator(state_list + 0.5*dt*b, t_i + 0.5*dt)
+        d = differential_operator(state_list + dt*c, t_i + dt)
+        state_list[n_ti] = d
+        #state_list[n_ti] += state_list[n_ti-1] + (1./6.)*dt*(a + 2*b + 2*c + d)
+    return (state_list,d) #state_list

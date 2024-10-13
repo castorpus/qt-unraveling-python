@@ -36,20 +36,23 @@ def parallel_run(fun, arg_list, tqdm_bar=False):
 
 
 def figure():
-    plt.rcParams.update({'font.size': 15})
+    plt.rcParams.update({'font.size': 10})
     fig, ax = plt.subplots()
-    fig.set_size_inches(w=10, h=5)
+    fig.set_size_inches(w=3*1.61803, h=3)
 
-    ax.spines["top"].set_linewidth(2)
-    ax.spines["left"].set_linewidth(2)
-    ax.spines["right"].set_linewidth(2)
-    ax.spines["bottom"].set_linewidth(2)
+    #ax.spines["top"].set_linewidth(2)
+    #ax.spines["left"].set_linewidth(2)
+    #ax.spines["right"].set_linewidth(2)
+    #ax.spines["bottom"].set_linewidth(2)
     
-    ax.grid()
+    ax.margins(0.01, 0.01)
+    ax.grid(alpha=0.25)
     return fig, ax
 
-def rhoBlochcomp_plot(rho_list, timeList, ax = None, component = ['rx', 'ry', 'rz'], line = '-', label = ''):  
-    rho_list = rho_list.copy()
+def rhoBlochcomp_plot(state_list, timeList, ax = None, 
+                      component = ['rx', 'ry', 'rz'], line = '-', 
+                      label = ''):  
+    state_list = state_list.copy()
     if not ax:
         fig, ax = figure()
     
@@ -62,12 +65,19 @@ def rhoBlochcomp_plot(rho_list, timeList, ax = None, component = ['rx', 'ry', 'r
     t = np.linspace(timeList[0], timeList[-1], t_steps)
     for r_i in component:
         r_ = []
-        for i in range(t_steps):
-            r_.append(np.real(np.trace(rho_list[i].dot(dict_sigma[r_i]))))
+        if len(np.shape(state_list[0])) == 1:
+            for i in range(t_steps):
+                r_.append(np.real(
+                    np.vdot(state_list[i],
+                            np.dot(dict_sigma[r_i],state_list[i]))
+                            ))
+        elif len(np.shape(state_list[0])) == 2:
+            for i in range(t_steps):
+                r_.append(np.real(np.trace(state_list[i].dot(dict_sigma[r_i]))))
         ax.plot(t, r_, line, label=f'{r_i} {label}', color=dict_color[r_i])
 
     ax.set_xlabel('time')
-    ax.legend()
+    ax.legend(prop={'size': 8})
 
 #@njit
 def rhoBlochcomp_data(rho):
