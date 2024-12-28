@@ -104,7 +104,7 @@ def GKSL_operator(drivingH, lindbladList, stateRho : np.ndarray, it : float) -> 
     Returns:
     unitary_evolution + Dc (array): resulting array of density matrices for each time step if last_point False, the last point of evolution otherwise
     """
-    c = lindbladList(it, stateRho) ## Original operators
+    c = lindbladList ## Original operators
     unitary_evolution = -1j*op.Com(drivingH(it), stateRho)
     Dc = op.D_vec(c, stateRho)
     return unitary_evolution + Dc

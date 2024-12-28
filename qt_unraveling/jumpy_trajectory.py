@@ -16,8 +16,8 @@ import qt_unraveling.misc_func as misc
 from qt_unraveling.integrators import scipy_integrator, schrodinger_operator
 
 #@njit(complex128[:,:,:](complex128[:,:], float64[:], complex128[:,:], complex128[:,:,:], complex128[:], complex128[:,:,:], complex128[:], int64))
-def jumpTrajectory_(initialState, timelist, drivingH,
-                       original_lindbladList, seed=10):
+def jumpTrajectory_(initialState, timelist, drivingH, Llist,
+                    cfields, seed=10):
     # Resetting the random generator
     np.random.seed(seed)
     # Timelist details
@@ -25,14 +25,13 @@ def jumpTrajectory_(initialState, timelist, drivingH,
     dt = timelist[1] - timelist[0]
 
     # Jump operators
-    jump_op_list = original_lindbladList
+    jump_op_list = Llist + cfields
     
     # Jump probability
     def jumpProb(state, J_op_list):
         """ When the system jumps, this function determines which jump 
         the system makes. 
         """
-
         weight = np.zeros(np.shape(J_op_list)[0], dtype=np.float64)
         J_idx = np.zeros(np.shape(J_op_list)[0], dtype=np.int64)
         for mu, Jmu in enumerate(J_op_list):
@@ -54,8 +53,10 @@ def jumpTrajectory_(initialState, timelist, drivingH,
     ## The no-jump part for the integrator
     #
     # no-jump operator
-    no_jump_op = drivingH - (1/2)*1j*sum(
-        [np.dot(np.conjugate(np.transpose(x)), x) for x in jump_op_list]
+    no_jump_op = drivingH - (0.5) * 1j * sum(
+        [np.dot(np.conjugate(np.transpose(x)), x) for x in Llist]
+        ) - 1j * sum([np.matmul(cfields[i],Llist[i]) for i in range(np.shape(Llist)[0])]) - (0.5) * 1j * sum(
+        [np.dot(np.conjugate(np.transpose(x)), x) for x in cfields]
         )
     # Making the operator time dependent.   
     def hamiltonian_eff(t, H_eff = no_jump_op): 
